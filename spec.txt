@@ -1,0 +1,26 @@
+We're going to make a Discord bot that does the following:
+
+Users register one or more course and CRN combos with a slash command:
+- `/register course:<course> crn:<crn>`
+- the bot stores multiple combos per user instead of replacing the previous one
+- the bot replies with a confirmation message after registration
+
+Users choose the alert channel in a server with:
+- `/start` in the channel where they want alerts posted
+- the bot remembers that channel for the server
+- `/start` should also show the list of all currently tracked course / CRN combos
+
+Every couple minutes at slightly random intervals, the bot sends a GET request to a REST API at:
+`https://localhost:7167/api/Course/[course]/[crn]`
+
+The API returns a seat count:
+- if the number is greater than 0, send a Discord message in the tracked channel and ping the user who registered that combo
+- if the number is exactly 0, do not send a Discord message, but log the check in the console
+- if the number is -1, treat it as an error, log it, and ping the Discord channel that there was an error
+
+Configuration notes:
+- `SEAT_API_BASE_URL` should control the base API URL and default to `https://localhost:7167`
+- `GUILD_ID` can be used to register slash commands immediately for one server
+- if `GUILD_ID` is not set, the command registration script should fall back to the saved guild from persisted state when possible
+
+Let me know if you have any other questions.

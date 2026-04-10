@@ -1,49 +1,63 @@
 import 'dotenv/config';
-import { getRPSChoices } from './game.js';
-import { capitalize, InstallGlobalCommands } from './utils.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { InstallGlobalCommands, InstallGuildCommands } from './utils.js';
 
-// Get the game choices from game.js
-function createCommandChoices() {
-  const choices = getRPSChoices();
-  const commandChoices = [];
+const DATA_FILE = path.resolve('data', 'seat-monitor-state.json');
 
-  for (let choice of choices) {
-    commandChoices.push({
-      name: capitalize(choice),
-      value: choice.toLowerCase(),
-    });
-  }
-
-  return commandChoices;
-}
-
-// Simple test command
-const TEST_COMMAND = {
-  name: 'test',
-  description: 'Basic command',
+const REGISTER_COMMAND = {
+  name: 'register',
+  description: 'Store a course and CRN for seat alerts',
   type: 1,
   integration_types: [0, 1],
   contexts: [0, 1, 2],
-};
-
-// Command containing options
-const CHALLENGE_COMMAND = {
-  name: 'challenge',
-  description: 'Challenge to a match of rock paper scissors',
   options: [
     {
       type: 3,
-      name: 'object',
-      description: 'Pick your object',
+      name: 'course',
+      description: 'Course code, such as CSCI101',
       required: true,
-      choices: createCommandChoices(),
+    },
+    {
+      type: 3,
+      name: 'crn',
+      description: 'Course reference number',
+      required: true,
     },
   ],
-  type: 1,
-  integration_types: [0, 1],
-  contexts: [0, 2],
 };
 
-const ALL_COMMANDS = [TEST_COMMAND, CHALLENGE_COMMAND];
+const START_COMMAND = {
+  name: 'start',
+  description: 'Start posting seat alerts in this channel',
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0],
+};
 
-InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);
+async function resolveGuildId() {
+  if (process.env.GUILD_ID?.trim()) {
+    return process.env.GUILD_ID.trim();
+  }
+
+  try {
+    const raw = await fs.readFile(DATA_FILE, 'utf8');
+    const state = JSON.parse(raw);
+    const savedGuildIds = Object.keys(state.guildChannels ?? {});
+    return savedGuildIds[0];
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('Failed to read saved guild state:', error);
+    }
+
+    return undefined;
+  }
+}
+
+const guildId = await resolveGuildId();
+
+if (guildId) {
+  await InstallGuildCommands(process.env.APP_ID, guildId, [REGISTER_COMMAND, START_COMMAND]);
+} else {
+  await InstallGlobalCommands(process.env.APP_ID, [REGISTER_COMMAND, START_COMMAND]);
+}
