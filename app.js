@@ -268,7 +268,7 @@ async function runCheck(registrationKey) {
     await notifyChannels(-1, registration);
     console.error(`Seat check failed for ${registration.course} ${registration.crn}:`, error);
   } finally {
-    scheduleNextCheck(userId);
+    scheduleNextCheck(registrationKey);
   }
 }
 
