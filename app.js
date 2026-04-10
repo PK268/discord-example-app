@@ -47,6 +47,12 @@ function upsertRegistration(entry) {
   return key;
 }
 
+function getRegistrationsForUser(userId) {
+  return [...registrations.entries()]
+    .filter(([, registration]) => registration.userId === userId)
+    .map(([key, registration]) => ({ key, registration }));
+}
+
 function randomDelay() {
   return Math.floor(POLL_MIN_MS + Math.random() * (POLL_MAX_MS - POLL_MIN_MS));
 }
@@ -272,6 +278,53 @@ async function runCheck(registrationKey) {
   }
 }
 
+async function runCheckNowForUser(userId) {
+  const userRegistrations = getRegistrationsForUser(userId);
+
+  if (userRegistrations.length === 0) {
+    return {
+      checked: 0,
+      openSeats: 0,
+      errors: 0,
+    };
+  }
+
+  const summary = {
+    checked: 0,
+    openSeats: 0,
+    errors: 0,
+  };
+
+  for (const { key, registration } of userRegistrations) {
+    summary.checked += 1;
+
+    try {
+      const seatCount = await fetchSeatCount(registration.course, registration.crn);
+
+      if (seatCount === 0) {
+        console.log(`Manual check returned 0 for ${registration.course} / ${registration.crn}; no Discord message sent.`);
+        continue;
+      }
+
+      if (seatCount === -1) {
+        summary.errors += 1;
+        await notifyChannels(-1, registration);
+        continue;
+      }
+
+      summary.openSeats += 1;
+      await notifyChannels(seatCount, registration);
+      scheduleNextCheck(key);
+    } catch (error) {
+      summary.errors += 1;
+      await notifyChannels(-1, registration);
+      console.error(`Manual seat check failed for ${registration.course} ${registration.crn}:`, error);
+    }
+  }
+
+  return summary;
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) {
     return;
@@ -309,6 +362,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
       ].join('\n'),
       ephemeral: true,
       allowedMentions: { parse: [] },
+    });
+
+    return;
+  }
+
+  if (interaction.commandName === 'checknow') {
+    const summary = await runCheckNowForUser(interaction.user.id);
+
+    if (summary.checked === 0) {
+      await interaction.reply({
+        content: 'No tracked course / CRN combos found for your account. Use /register first.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await interaction.reply({
+      content: [
+        `Checked ${summary.checked} tracked combo${summary.checked === 1 ? '' : 's'} right now.`,
+        `${summary.openSeats} had open seats.`,
+        `${summary.errors} returned an error.`,
+      ].join('\n'),
+      ephemeral: true,
     });
 
     return;

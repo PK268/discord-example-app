@@ -35,6 +35,14 @@ const START_COMMAND = {
   contexts: [0],
 };
 
+const CHECKNOW_COMMAND = {
+  name: 'checknow',
+  description: 'Check all tracked course and CRN combos right now',
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+};
+
 async function resolveGuildId() {
   if (process.env.GUILD_ID?.trim()) {
     return process.env.GUILD_ID.trim();
@@ -57,7 +65,7 @@ async function resolveGuildId() {
 const guildId = await resolveGuildId();
 
 if (guildId) {
-  await InstallGuildCommands(process.env.APP_ID, guildId, [REGISTER_COMMAND, START_COMMAND]);
+  await InstallGuildCommands(process.env.APP_ID, guildId, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND]);
 } else {
-  await InstallGlobalCommands(process.env.APP_ID, [REGISTER_COMMAND, START_COMMAND]);
+  await InstallGlobalCommands(process.env.APP_ID, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND]);
 }
