@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import http from 'node:http';
 import https from 'node:https';
 import {
   Client,
@@ -107,7 +108,11 @@ function parseSeatCount(rawBody) {
 
 function requestText(url) {
   return new Promise((resolve, reject) => {
-    const request = https.get(url, { rejectUnauthorized: false }, (response) => {
+    const parsedUrl = new URL(url);
+    const client = parsedUrl.protocol === 'http:' ? http : https;
+    const requestOptions = parsedUrl.protocol === 'https:' ? { rejectUnauthorized: false } : undefined;
+
+    const request = client.get(parsedUrl, requestOptions, (response) => {
       let body = '';
 
       response.setEncoding('utf8');
