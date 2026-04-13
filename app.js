@@ -21,6 +21,7 @@ const DATA_FILE = path.resolve('data', 'seat-monitor-state.json');
 const SEAT_API_BASE_URL = (process.env.SEAT_API_BASE_URL || 'https://localhost:7167').replace(/\/$/, '');
 const POLL_MIN_MS = 120000;
 const POLL_MAX_MS = 180000;
+const KEEPALIVE_INTERVAL_MS = 240000;
 const SPECIAL_AUTOPOST_COURSE = 'CS3000';
 const SPECIAL_AUTOPOST_CRN = '13895';
 
@@ -28,6 +29,7 @@ const registrations = new Map();
 const guildChannels = new Map();
 const scheduledChecks = new Map();
 const autoPostParams = new Map();
+const keepaliveTimers = new Map();
 
 function formatTrackedCourses() {
   if (registrations.size === 0) {
@@ -67,6 +69,29 @@ function getClientForUrl(url) {
 
 function isSpecialAutoPostRegistration(registration) {
   return registration.course.toUpperCase() === SPECIAL_AUTOPOST_COURSE && registration.crn === SPECIAL_AUTOPOST_CRN;
+}
+
+function clearKeepalive(userId) {
+  const timer = keepaliveTimers.get(userId);
+
+  if (timer) {
+    clearTimeout(timer);
+    keepaliveTimers.delete(userId);
+  }
+}
+
+function scheduleKeepalive(userId) {
+  clearKeepalive(userId);
+
+  if (!autoPostParams.has(userId)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    void runKeepalive(userId);
+  }, KEEPALIVE_INTERVAL_MS);
+
+  keepaliveTimers.set(userId, timer);
 }
 
 function randomDelay() {
@@ -181,6 +206,22 @@ function requestStatus(url, method) {
   });
 }
 
+async function requestKeepalive(userId) {
+  const params = autoPostParams.get(userId);
+
+  if (!params) {
+    return { attempted: false };
+  }
+
+  const url = `${SEAT_API_BASE_URL}/keepalive/${encodeURIComponent(params.xsynctoken)}/${encodeURIComponent(params.cookieString)}/${encodeURIComponent(params.uniqueSessionId)}`;
+  const response = await requestStatus(url, 'GET');
+
+  return {
+    attempted: true,
+    statusCode: response.statusCode,
+  };
+}
+
 async function fetchSeatCount(course, crn) {
   const url = `${SEAT_API_BASE_URL}/api/Course/${encodeURIComponent(course)}/${encodeURIComponent(crn)}`;
   const body = await requestText(url);
@@ -239,10 +280,33 @@ async function loadState() {
     for (const [userId, params] of Object.entries(payload.autoPostParams ?? {})) {
       autoPostParams.set(userId, params);
     }
+
+    for (const userId of autoPostParams.keys()) {
+      scheduleKeepalive(userId);
+    }
   } catch (error) {
     if (error?.code !== 'ENOENT') {
       throw error;
     }
+  }
+}
+
+async function runKeepalive(userId) {
+  if (!autoPostParams.has(userId)) {
+    clearKeepalive(userId);
+    return;
+  }
+
+  try {
+    const result = await requestKeepalive(userId);
+
+    if (result.attempted) {
+      console.log(`Keepalive succeeded for ${userId} with status ${result.statusCode}.`);
+    }
+  } catch (error) {
+    console.error(`Keepalive failed for ${userId}:`, error);
+  } finally {
+    scheduleKeepalive(userId);
   }
 }
 
@@ -482,6 +546,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       updatedAt: Date.now(),
     });
 
+    scheduleKeepalive(interaction.user.id);
+
     try {
       await saveState();
     } catch (error) {
@@ -557,6 +623,10 @@ client.once(Events.ClientReady, async () => {
 
   for (const registrationKey of registrations.keys()) {
     scheduleNextCheck(registrationKey);
+  }
+
+  for (const userId of autoPostParams.keys()) {
+    scheduleKeepalive(userId);
   }
 
   console.log(`Logged in as ${client.user.tag}`);
