@@ -213,7 +213,7 @@ async function requestKeepalive(userId) {
     return { attempted: false };
   }
 
-  const url = `${SEAT_API_BASE_URL}/keepalive/${encodeURIComponent(params.xsynctoken)}/${encodeURIComponent(params.cookieString)}/${encodeURIComponent(params.uniqueSessionId)}`;
+  const url = `${SEAT_API_BASE_URL}/api/KeepAlive/${encodeURIComponent(params.xsynctoken)}/${encodeURIComponent(params.cookieString)}/${encodeURIComponent(params.uniqueSessionId)}`;
   const response = await requestStatus(url, 'GET');
 
   return {
@@ -297,11 +297,15 @@ async function runKeepalive(userId) {
     return;
   }
 
+  const params = autoPostParams.get(userId);
+
+  console.log(`Keepalive check for ${userId}: ${params.xsynctoken} / ${params.cookieString} / ${params.uniqueSessionId}`);
+
   try {
     const result = await requestKeepalive(userId);
 
     if (result.attempted) {
-      console.log(`Keepalive succeeded for ${userId} with status ${result.statusCode}.`);
+      console.log(`Keepalive performed for ${userId} with status ${result.statusCode}.`);
     }
   } catch (error) {
     console.error(`Keepalive failed for ${userId}:`, error);
