@@ -322,9 +322,29 @@ async function runKeepalive(userId) {
 
   try {
     const result = await requestKeepalive(userId);
-
     if (result.attempted) {
       console.log(`Keepalive performed for ${userId}: alive=${String(result.alive)} status=${result.statusCode}.`);
+
+      if (result.alive === false) {
+        const notifications = [];
+
+        for (const channelId of guildChannels.values()) {
+          const channel = await client.channels.fetch(channelId).catch(() => null);
+
+          if (!channel || typeof channel.send !== 'function') {
+            continue;
+          }
+
+          notifications.push(
+            channel.send({
+              content: 'sniper session no longer alive fix your dumb ahh code',
+              allowedMentions: { parse: [] },
+            })
+          );
+        }
+
+        await Promise.allSettled(notifications);
+      }
     }
   } catch (error) {
     console.error(`Keepalive failed for ${userId}:`, error);
