@@ -21,10 +21,13 @@ const DATA_FILE = path.resolve('data', 'seat-monitor-state.json');
 const SEAT_API_BASE_URL = (process.env.SEAT_API_BASE_URL || 'https://localhost:7167').replace(/\/$/, '');
 const POLL_MIN_MS = 120000;
 const POLL_MAX_MS = 180000;
+const SPECIAL_AUTOPOST_COURSE = 'CS3000';
+const SPECIAL_AUTOPOST_CRN = '13895';
 
 const registrations = new Map();
 const guildChannels = new Map();
 const scheduledChecks = new Map();
+const autoPostParams = new Map();
 
 function formatTrackedCourses() {
   if (registrations.size === 0) {
@@ -51,6 +54,19 @@ function getRegistrationsForUser(userId) {
   return [...registrations.entries()]
     .filter(([, registration]) => registration.userId === userId)
     .map(([key, registration]) => ({ key, registration }));
+}
+
+function getClientForUrl(url) {
+  const parsedUrl = new URL(url);
+  return {
+    parsedUrl,
+    client: parsedUrl.protocol === 'http:' ? http : https,
+    requestOptions: parsedUrl.protocol === 'https:' ? { rejectUnauthorized: false } : undefined,
+  };
+}
+
+function isSpecialAutoPostRegistration(registration) {
+  return registration.course.toUpperCase() === SPECIAL_AUTOPOST_COURSE && registration.crn === SPECIAL_AUTOPOST_CRN;
 }
 
 function randomDelay() {
@@ -114,9 +130,7 @@ function parseSeatCount(rawBody) {
 
 function requestText(url) {
   return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url);
-    const client = parsedUrl.protocol === 'http:' ? http : https;
-    const requestOptions = parsedUrl.protocol === 'https:' ? { rejectUnauthorized: false } : undefined;
+    const { parsedUrl, client, requestOptions } = getClientForUrl(url);
 
     const request = client.get(parsedUrl, requestOptions, (response) => {
       let body = '';
@@ -139,6 +153,34 @@ function requestText(url) {
   });
 }
 
+function requestStatus(url, method) {
+  return new Promise((resolve, reject) => {
+    const { parsedUrl, client, requestOptions } = getClientForUrl(url);
+    const request = client.request(parsedUrl, { ...requestOptions, method }, (response) => {
+      let body = '';
+
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+      });
+      response.on('end', () => {
+        if ((response.statusCode ?? 0) >= 400) {
+          reject(new Error(`HTTP ${response.statusCode}: ${body}`));
+          return;
+        }
+
+        resolve({
+          statusCode: response.statusCode ?? 0,
+          body,
+        });
+      });
+    });
+
+    request.on('error', reject);
+    request.end();
+  });
+}
+
 async function fetchSeatCount(course, crn) {
   const url = `${SEAT_API_BASE_URL}/api/Course/${encodeURIComponent(course)}/${encodeURIComponent(crn)}`;
   const body = await requestText(url);
@@ -151,6 +193,7 @@ async function saveState() {
   const payload = {
     registrations: Object.fromEntries(registrations),
     guildChannels: Object.fromEntries(guildChannels),
+    autoPostParams: Object.fromEntries(autoPostParams),
   };
 
   await fs.writeFile(DATA_FILE, JSON.stringify(payload, null, 2), 'utf8');
@@ -192,11 +235,38 @@ async function loadState() {
     for (const [guildId, channelId] of Object.entries(payload.guildChannels ?? {})) {
       guildChannels.set(guildId, channelId);
     }
+
+    for (const [userId, params] of Object.entries(payload.autoPostParams ?? {})) {
+      autoPostParams.set(userId, params);
+    }
   } catch (error) {
     if (error?.code !== 'ENOENT') {
       throw error;
     }
   }
+}
+
+async function triggerSpecialAutoPost(registration) {
+  if (!isSpecialAutoPostRegistration(registration)) {
+    return { attempted: false };
+  }
+
+  const params = autoPostParams.get(registration.userId);
+
+  if (!params) {
+    return {
+      attempted: false,
+      reason: 'Auto-post parameters have not been configured. Run /setautoparams first.',
+    };
+  }
+
+  const url = `${SEAT_API_BASE_URL}/${encodeURIComponent(params.xsynctoken)}/${encodeURIComponent(params.cookieString)}/${encodeURIComponent(params.uniqueSessionId)}`;
+  const response = await requestStatus(url, 'POST');
+
+  return {
+    attempted: true,
+    statusCode: response.statusCode,
+  };
 }
 
 function scheduleNextCheck(registrationKey) {
@@ -218,7 +288,7 @@ function scheduleNextCheck(registrationKey) {
   scheduledChecks.set(registrationKey, timer);
 }
 
-async function notifyChannels(seatCount, registration) {
+async function notifyChannels(seatCount, registration, errorDetail) {
   if (guildChannels.size === 0) {
     return;
   }
@@ -244,7 +314,14 @@ async function notifyChannels(seatCount, registration) {
     } else if (seatCount === -1) {
       notifications.push(
         channel.send({
-          content: `@here Error checking seats for ${baseMessage}.`,
+          content: `${userMention} seat API returned -1 for ${baseMessage}.`,
+          allowedMentions: { users: [registration.userId] },
+        })
+      );
+    } else if (seatCount === -2) {
+      notifications.push(
+        channel.send({
+          content: `${userMention} seat API request failed for ${baseMessage}: ${errorDetail ?? 'unknown error'}`,
           allowedMentions: { parse: ['everyone'] },
         })
       );
@@ -252,6 +329,25 @@ async function notifyChannels(seatCount, registration) {
   }
 
   await Promise.allSettled(notifications);
+}
+
+async function processOpenSeat(registration, seatCount) {
+  const autoPostResult = await triggerSpecialAutoPost(registration).catch((error) => ({
+    attempted: true,
+    failed: true,
+    message: error instanceof Error ? error.message : String(error),
+  }));
+
+  if (autoPostResult?.failed) {
+    console.error(`Special auto-post failed for ${registration.course} ${registration.crn}:`, autoPostResult.message);
+    await notifyChannels(-2, registration, `special auto-post failed: ${autoPostResult.message}`);
+  } else if (autoPostResult?.attempted) {
+    console.log(`Special auto-post succeeded for ${registration.course} / ${registration.crn} with status ${autoPostResult.statusCode}.`);
+  } else if (autoPostResult?.reason) {
+    console.log(`Special auto-post skipped for ${registration.course} / ${registration.crn}: ${autoPostResult.reason}`);
+  }
+
+  await notifyChannels(seatCount, registration);
 }
 
 async function runCheck(registrationKey) {
@@ -269,10 +365,15 @@ async function runCheck(registrationKey) {
       return;
     }
 
-    await notifyChannels(seatCount, registration);
+    if (seatCount === -1) {
+      await notifyChannels(-1, registration);
+      return;
+    }
+
+    await processOpenSeat(registration, seatCount);
   } catch (error) {
-    await notifyChannels(-1, registration);
-    console.error(`Seat check failed for ${registration.course} ${registration.crn}:`, error);
+    await notifyChannels(-2, registration, error instanceof Error ? error.message : String(error));
+    console.error(`Seat check request failed for ${registration.course} ${registration.crn}:`, error);
   } finally {
     scheduleNextCheck(registrationKey);
   }
@@ -285,14 +386,16 @@ async function runCheckNowForUser(userId) {
     return {
       checked: 0,
       openSeats: 0,
-      errors: 0,
+      apiReturnedNegativeOne: 0,
+      requestFailures: 0,
     };
   }
 
   const summary = {
     checked: 0,
     openSeats: 0,
-    errors: 0,
+    apiReturnedNegativeOne: 0,
+    requestFailures: 0,
   };
 
   for (const { key, registration } of userRegistrations) {
@@ -307,18 +410,18 @@ async function runCheckNowForUser(userId) {
       }
 
       if (seatCount === -1) {
-        summary.errors += 1;
+        summary.apiReturnedNegativeOne += 1;
         await notifyChannels(-1, registration);
         continue;
       }
 
       summary.openSeats += 1;
-      await notifyChannels(seatCount, registration);
+      await processOpenSeat(registration, seatCount);
       scheduleNextCheck(key);
     } catch (error) {
-      summary.errors += 1;
-      await notifyChannels(-1, registration);
-      console.error(`Manual seat check failed for ${registration.course} ${registration.crn}:`, error);
+      summary.requestFailures += 1;
+      await notifyChannels(-2, registration, error instanceof Error ? error.message : String(error));
+      console.error(`Manual seat check request failed for ${registration.course} ${registration.crn}:`, error);
     }
   }
 
@@ -367,6 +470,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.commandName === 'setautoparams') {
+    const xsynctoken = interaction.options.getString('xsynctoken', true).trim();
+    const cookieString = interaction.options.getString('cookiestring', true).trim();
+    const uniqueSessionId = interaction.options.getString('uniquesessionid', true).trim();
+
+    autoPostParams.set(interaction.user.id, {
+      xsynctoken,
+      cookieString,
+      uniqueSessionId,
+      updatedAt: Date.now(),
+    });
+
+    try {
+      await saveState();
+    } catch (error) {
+      console.error('Failed to save auto-post parameters:', error);
+    }
+
+    await interaction.reply({
+      content: 'Stored auto-post parameters for the special CS3000 / 13895 flow.',
+      ephemeral: true,
+      allowedMentions: { parse: [] },
+    });
+
+    return;
+  }
+
   if (interaction.commandName === 'checknow') {
     const summary = await runCheckNowForUser(interaction.user.id);
 
@@ -382,7 +512,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       content: [
         `Checked ${summary.checked} tracked combo${summary.checked === 1 ? '' : 's'} right now.`,
         `${summary.openSeats} had open seats.`,
-        `${summary.errors} returned an error.`,
+        `${summary.apiReturnedNegativeOne} returned -1 from the API.`,
+        `${summary.requestFailures} had request/transport failures.`,
       ].join('\n'),
       ephemeral: true,
     });

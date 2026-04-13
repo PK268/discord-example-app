@@ -43,6 +43,34 @@ const CHECKNOW_COMMAND = {
   contexts: [0, 1, 2],
 };
 
+const SETAUTOPARAMS_COMMAND = {
+  name: 'setautoparams',
+  description: 'Store the auto-post parameters for the special CS3000 / 13895 flow',
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+  options: [
+    {
+      type: 3,
+      name: 'xsynctoken',
+      description: 'The xsynctoken path parameter',
+      required: true,
+    },
+    {
+      type: 3,
+      name: 'cookiestring',
+      description: 'The cookieString path parameter',
+      required: true,
+    },
+    {
+      type: 3,
+      name: 'uniquesessionid',
+      description: 'The uniqueSessionId path parameter',
+      required: true,
+    },
+  ],
+};
+
 async function resolveGuildId() {
   if (process.env.GUILD_ID?.trim()) {
     return process.env.GUILD_ID.trim();
@@ -65,7 +93,7 @@ async function resolveGuildId() {
 const guildId = await resolveGuildId();
 
 if (guildId) {
-  await InstallGuildCommands(process.env.APP_ID, guildId, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND]);
+  await InstallGuildCommands(process.env.APP_ID, guildId, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, SETAUTOPARAMS_COMMAND]);
 } else {
-  await InstallGlobalCommands(process.env.APP_ID, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND]);
+  await InstallGlobalCommands(process.env.APP_ID, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, SETAUTOPARAMS_COMMAND]);
 }
