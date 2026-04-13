@@ -216,9 +216,28 @@ async function requestKeepalive(userId) {
   const url = `${SEAT_API_BASE_URL}/api/KeepAlive/${encodeURIComponent(params.xsynctoken)}/${encodeURIComponent(params.cookieString)}/${encodeURIComponent(params.uniqueSessionId)}`;
   const response = await requestStatus(url, 'GET');
 
+  const bodyText = String(response.body ?? '').trim();
+
+  let alive = null;
+  try {
+    const parsed = JSON.parse(bodyText);
+    if (typeof parsed === 'boolean') {
+      alive = parsed;
+    } else if (typeof parsed === 'number') {
+      alive = parsed !== 0;
+    } else if (typeof parsed === 'string') {
+      alive = parsed.toLowerCase() === 'true';
+    }
+  } catch {
+    // If JSON.parse fails, fall back to simple text checks.
+    alive = bodyText.toLowerCase() === 'true' || bodyText === '1';
+  }
+
   return {
     attempted: true,
     statusCode: response.statusCode,
+    alive,
+    rawBody: bodyText,
   };
 }
 
@@ -305,7 +324,7 @@ async function runKeepalive(userId) {
     const result = await requestKeepalive(userId);
 
     if (result.attempted) {
-      console.log(`Keepalive performed for ${userId} with status ${result.statusCode}.`);
+      console.log(`Keepalive performed for ${userId}: alive=${String(result.alive)} status=${result.statusCode}.`);
     }
   } catch (error) {
     console.error(`Keepalive failed for ${userId}:`, error);

@@ -1,4 +1,4 @@
-We're going to make a Discord bot that does the following:
+A Discord bot that does the following:
 
 Users register one or more course and CRN combos with a slash command:
 - `/register course:<course> crn:<crn>`
@@ -23,4 +23,44 @@ Configuration notes:
 - `GUILD_ID` can be used to register slash commands immediately for one server
 - if `GUILD_ID` is not set, the command registration script should fall back to the saved guild from persisted state when possible
 
-Let me know if you have any other questions.
+Implemented features (current):
+
+- Commands:
+	- `/register course:<course> crn:<crn>` — store one or more course/CRN combos per user (does not replace prior registrations); bot replies with confirmation.
+	- `/start` — run in the desired channel to make that channel the alert destination for the server; the command also returns a list of all currently tracked course/CRN combos and their registering users.
+	- `/checknow` — immediately run checks for all combos registered by the invoking user and return a brief ephemeral summary showing successes, API -1 responses, and any transport/request failures.
+	- `/setautoparams xsynctoken:<token> cookieString:<cookie> uniqueSessionId:<id>` — persist three strings for a special autopost flow and enable a keepalive loop for those params.
+
+- Polling behavior:
+	- Each registered course/CRN combo is polled on its own schedule at slightly randomized intervals (default range ~2–3 minutes between checks).
+	- API endpoint used: `{SEAT_API_BASE_URL}/api/Course/[course]/[crn]`. `SEAT_API_BASE_URL` defaults to `https://localhost:7167` and supports `http` or `https`.
+	- Seat count handling:
+		- >0: the bot posts to the server's selected alert channel and mentions the user who registered that combo.
+		- 0: no Discord message is posted; the check is logged to the console only.
+		- -1: treated as an API error — logged and a message is posted in the alert channel indicating the API returned -1 for that combo.
+		- Transport/request failures (network, timeouts, non-API responses) are treated and logged separately and surfaced in `/checknow` summaries.
+
+- Special autopost flow:
+	- If a tracked combo matches course `CS3000` and CRN `13895` (case-insensitive course match), and the combo finds open seats (>0), the bot will automatically POST to:
+		`{SEAT_API_BASE_URL}/{xsynctoken}/{cookieString}/{uniqueSessionId}`
+		using the three values previously stored via `/setautoparams` for that user.
+	- The POST trigger occurs once per detected open event; the standard notification message is still sent to the alert channel (and pings the user).
+
+- Keepalive:
+	- While a user has `autoparams` set, the bot performs a GET to:
+		`{SEAT_API_BASE_URL}/keepalive/{xsynctoken}/{cookieString}/{uniqueSessionId}` every 4 minutes.
+	- Keepalive runs are logged with the three parameters and the fact that the check was performed; keepalive timers are persisted so they survive restarts.
+
+- Persistence and state:
+	- Bot state (registrations, server alert channel per guild, and stored autopost params) is persisted to data/seat-monitor-state.json and reloaded on startup.
+	- Registrations are stored as multiple entries per user and uniquely tracked (keyed by user:course:crn) so a user may monitor many combos.
+
+- Command registration / deployment notes:
+	- `GUILD_ID` may be set to register slash commands for a single server immediately for testing; if not provided, the registration script attempts to fall back to a saved guild ID from persisted state when present.
+	- Run `npm run register` (or the included command registration script) after setting environment variables to install commands.
+
+- Operational notes / safety:
+	- The bot avoids privileged intents (message content) to prevent disallowed-intent errors; registration and commands are slash-command based.
+	- The polling cadence and randomized intervals are intended to avoid synchronized bursts; adjust timing constants in `app.js` if needed.
+
+If you want, I can also add an `/unregister` command to remove saved combos, or refine the notification format to use embed messages.
