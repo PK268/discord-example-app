@@ -98,32 +98,6 @@ function randomDelay() {
   return Math.floor(POLL_MIN_MS + Math.random() * (POLL_MAX_MS - POLL_MIN_MS));
 }
 
-function normalizeCourseInput(content) {
-  const normalized = content.replace(/\s+/g, ' ').trim();
-
-  if (!normalized) {
-    return null;
-  }
-
-  const labeledMatch = normalized.match(/course\s*[:=]\s*([^\s,;]+).*crn\s*[:=]\s*([^\s,;]+)/i);
-  if (labeledMatch) {
-    return {
-      course: labeledMatch[1],
-      crn: labeledMatch[2],
-    };
-  }
-
-  const tokens = normalized.split(/[\s,;]+/).filter(Boolean);
-  if (tokens.length < 2) {
-    return null;
-  }
-
-  return {
-    course: tokens[0],
-    crn: tokens[1],
-  };
-}
-
 function parseSeatCount(rawBody) {
   const rawText = String(rawBody ?? '').trim();
 
