@@ -30,6 +30,8 @@ const guildChannels = new Map();
 const scheduledChecks = new Map();
 const autoPostParams = new Map();
 const keepaliveTimers = new Map();
+const errorNotificationUsers = new Set();
+const specialAutoPostUsers = new Set();
 
 function formatTrackedCourses() {
   if (registrations.size === 0) {
@@ -71,6 +73,14 @@ function isSpecialAutoPostRegistration(registration) {
   return registration.course.toUpperCase() === SPECIAL_AUTOPOST_COURSE && registration.crn === SPECIAL_AUTOPOST_CRN;
 }
 
+function shouldReceiveErrorNotifications(userId) {
+  return errorNotificationUsers.has(userId);
+}
+
+function shouldTriggerSpecialAutoPost(userId) {
+  return specialAutoPostUsers.has(userId);
+}
+
 function clearKeepalive(userId) {
   const timer = keepaliveTimers.get(userId);
 
@@ -83,7 +93,7 @@ function clearKeepalive(userId) {
 function scheduleKeepalive(userId) {
   clearKeepalive(userId);
 
-  if (!autoPostParams.has(userId)) {
+  if (!autoPostParams.has(userId) || !shouldTriggerSpecialAutoPost(userId)) {
     return;
   }
 
@@ -228,6 +238,8 @@ async function saveState() {
     registrations: Object.fromEntries(registrations),
     guildChannels: Object.fromEntries(guildChannels),
     autoPostParams: Object.fromEntries(autoPostParams),
+    errorNotificationUsers: [...errorNotificationUsers],
+    specialAutoPostUsers: [...specialAutoPostUsers],
   };
 
   await fs.writeFile(DATA_FILE, JSON.stringify(payload, null, 2), 'utf8');
@@ -274,7 +286,15 @@ async function loadState() {
       autoPostParams.set(userId, params);
     }
 
-    for (const userId of autoPostParams.keys()) {
+    for (const userId of payload.errorNotificationUsers ?? []) {
+      errorNotificationUsers.add(userId);
+    }
+
+    for (const userId of payload.specialAutoPostUsers ?? []) {
+      specialAutoPostUsers.add(userId);
+    }
+
+    for (const userId of specialAutoPostUsers) {
       scheduleKeepalive(userId);
     }
   } catch (error) {
@@ -309,6 +329,13 @@ async function runKeepalive(userId) {
 async function triggerSpecialAutoPost(registration) {
   if (!isSpecialAutoPostRegistration(registration)) {
     return { attempted: false };
+  }
+
+  if (!shouldTriggerSpecialAutoPost(registration.userId)) {
+    return {
+      attempted: false,
+      reason: 'Special auto-post is not enabled for this user. Run /specialautopost enabled:true first.',
+    };
   }
 
   const params = autoPostParams.get(registration.userId);
@@ -372,6 +399,10 @@ async function notifyChannels(seatCount, registration, errorDetail) {
         })
       );
     } else if (seatCount === -1) {
+      if (!shouldReceiveErrorNotifications(registration.userId)) {
+        continue;
+      }
+
       notifications.push(
         channel.send({
           content: `${userMention} seat API returned -1 for ${baseMessage}.`,
@@ -379,10 +410,14 @@ async function notifyChannels(seatCount, registration, errorDetail) {
         })
       );
     } else if (seatCount === -2) {
+      if (!shouldReceiveErrorNotifications(registration.userId)) {
+        continue;
+      }
+
       notifications.push(
         channel.send({
           content: `${userMention} seat API request failed for ${baseMessage}: ${errorDetail ?? 'unknown error'}`,
-          allowedMentions: { parse: ['everyone'] },
+          allowedMentions: { users: [registration.userId] },
         })
       );
     }
@@ -551,7 +586,61 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     await interaction.reply({
-      content: 'Stored auto-post parameters for the special CS3000 / 13895 flow.',
+      content: 'Stored auto-post parameters for the special CS3000 / 13895 flow. The special request and keepalive stay off until you enable them with /specialautopost enabled:true.',
+      ephemeral: true,
+      allowedMentions: { parse: [] },
+    });
+
+    return;
+  }
+
+  if (interaction.commandName === 'seeerrors') {
+    const enabled = interaction.options.getBoolean('enabled', true);
+
+    if (enabled) {
+      errorNotificationUsers.add(interaction.user.id);
+    } else {
+      errorNotificationUsers.delete(interaction.user.id);
+    }
+
+    try {
+      await saveState();
+    } catch (error) {
+      console.error('Failed to save error notification preferences:', error);
+    }
+
+    await interaction.reply({
+      content: enabled
+        ? 'Error notifications are enabled for your tracked course / CRN combos.'
+        : 'Error notifications are disabled for your tracked course / CRN combos.',
+      ephemeral: true,
+      allowedMentions: { parse: [] },
+    });
+
+    return;
+  }
+
+  if (interaction.commandName === 'specialautopost') {
+    const enabled = interaction.options.getBoolean('enabled', true);
+
+    if (enabled) {
+      specialAutoPostUsers.add(interaction.user.id);
+      scheduleKeepalive(interaction.user.id);
+    } else {
+      specialAutoPostUsers.delete(interaction.user.id);
+      clearKeepalive(interaction.user.id);
+    }
+
+    try {
+      await saveState();
+    } catch (error) {
+      console.error('Failed to save special auto-post preferences:', error);
+    }
+
+    await interaction.reply({
+      content: enabled
+        ? 'Special CS3000 / 13895 auto-post requests are enabled for your account.'
+        : 'Special CS3000 / 13895 auto-post requests are disabled for your account.',
       ephemeral: true,
       allowedMentions: { parse: [] },
     });

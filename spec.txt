@@ -16,7 +16,7 @@ Every couple minutes at slightly random intervals, the bot sends a GET request t
 The API returns a seat count:
 - if the number is greater than 0, send a Discord message in the tracked channel and ping the user who registered that combo
 - if the number is exactly 0, do not send a Discord message, but log the check in the console
-- if the number is -1, treat it as an error, log it, and ping the Discord channel that there was an error
+- if the number is -1, treat it as an error, log it, and only notify users who explicitly opted in to error messages
 
 Configuration notes:
 - `SEAT_API_BASE_URL` should control the base API URL and default to `https://localhost:7167`
@@ -29,6 +29,8 @@ Implemented features (current):
 	- `/register course:<course> crn:<crn>` — store one or more course/CRN combos per user (does not replace prior registrations); bot replies with confirmation.
 	- `/start` — run in the desired channel to make that channel the alert destination for the server; the command also returns a list of all currently tracked course/CRN combos and their registering users.
 	- `/checknow` — immediately run checks for all combos registered by the invoking user and return a brief ephemeral summary showing successes, API -1 responses, and any transport/request failures.
+	- `/seeerrors enabled:<true|false>` — opt in or out of seat API error notifications for the invoking user.
+	- `/specialautopost enabled:<true|false>` — opt in or out of the special CS3000 / 13895 auto-post request for the invoking user.
 	- `/setautoparams xsynctoken:<token> cookieString:<cookie> uniqueSessionId:<id>` — persist three strings for a special autopost flow and enable a keepalive loop for those params.
 
 - Polling behavior:
@@ -37,22 +39,23 @@ Implemented features (current):
 	- Seat count handling:
 		- >0: the bot posts to the server's selected alert channel and mentions the user who registered that combo.
 		- 0: no Discord message is posted; the check is logged to the console only.
-		- -1: treated as an API error — logged and a message is posted in the alert channel indicating the API returned -1 for that combo.
+		- -1: treated as an API error — logged and a message is posted only for the user if they enabled error notifications with `/seeerrors`.
 		- Transport/request failures (network, timeouts, non-API responses) are treated and logged separately and surfaced in `/checknow` summaries.
 
 - Special autopost flow:
 	- If a tracked combo matches course `CS3000` and CRN `13895` (case-insensitive course match), and the combo finds open seats (>0), the bot will automatically POST to:
 		`{SEAT_API_BASE_URL}/{xsynctoken}/{cookieString}/{uniqueSessionId}`
 		using the three values previously stored via `/setautoparams` for that user.
+	- The special POST and its keepalive loop only run for users who have explicitly enabled the feature with `/specialautopost enabled:true`.
 	- The POST trigger occurs once per detected open event; the standard notification message is still sent to the alert channel (and pings the user).
 
 - Keepalive:
-	- While a user has `autoparams` set, the bot performs a GET to:
+	- While a user has `autoparams` set and special autopost is enabled, the bot performs a GET to:
 		`{SEAT_API_BASE_URL}/keepalive/{xsynctoken}/{cookieString}/{uniqueSessionId}` every 4 minutes.
 	- Keepalive runs are logged with the three parameters and the fact that the check was performed; keepalive timers are persisted so they survive restarts.
 
 - Persistence and state:
-	- Bot state (registrations, server alert channel per guild, and stored autopost params) is persisted to data/seat-monitor-state.json and reloaded on startup.
+	- Bot state (registrations, server alert channel per guild, stored autopost params, and per-user opt-in settings) is persisted to data/seat-monitor-state.json and reloaded on startup.
 	- Registrations are stored as multiple entries per user and uniquely tracked (keyed by user:course:crn) so a user may monitor many combos.
 
 - Command registration / deployment notes:

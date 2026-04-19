@@ -43,6 +43,38 @@ const CHECKNOW_COMMAND = {
   contexts: [0, 1, 2],
 };
 
+const SEEERRORS_COMMAND = {
+  name: 'seeerrors',
+  description: 'Opt in or out of seat API error messages for your tracked combos',
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+  options: [
+    {
+      type: 5,
+      name: 'enabled',
+      description: 'True to receive error messages, false to turn them off',
+      required: true,
+    },
+  ],
+};
+
+const SPECIALAUTOPOST_COMMAND = {
+  name: 'specialautopost',
+  description: 'Opt in or out of the special CS3000 / 13895 auto-post request',
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+  options: [
+    {
+      type: 5,
+      name: 'enabled',
+      description: 'True to enable the special request, false to disable it',
+      required: true,
+    },
+  ],
+};
+
 const SETAUTOPARAMS_COMMAND = {
   name: 'setautoparams',
   description: 'Store the auto-post parameters for the special CS3000 / 13895 flow',
@@ -93,7 +125,7 @@ async function resolveGuildId() {
 const guildId = await resolveGuildId();
 
 if (guildId) {
-  await InstallGuildCommands(process.env.APP_ID, guildId, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, SETAUTOPARAMS_COMMAND]);
+  await InstallGuildCommands(process.env.APP_ID, guildId, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, SEEERRORS_COMMAND, SPECIALAUTOPOST_COMMAND, SETAUTOPARAMS_COMMAND]);
 } else {
-  await InstallGlobalCommands(process.env.APP_ID, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, SETAUTOPARAMS_COMMAND]);
+  await InstallGlobalCommands(process.env.APP_ID, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, SEEERRORS_COMMAND, SPECIALAUTOPOST_COMMAND, SETAUTOPARAMS_COMMAND]);
 }
