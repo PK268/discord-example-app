@@ -5,8 +5,10 @@ This project is a Discord bot that tracks registered course / CRN pairs, polls a
 ## Commands
 
 - `/register course:<course> crn:<crn>` — store a tracked course / CRN pair for the user
+- `/unregister course:<course> crn:<crn>` — remove a tracked course / CRN pair for the user
 - `/start` — set the current channel as the alert channel for the server and show all tracked pairs
 - `/checknow` — immediately check all of the invoking user's tracked pairs
+- `/listregistrations` — list all of the invoking user's currently tracked course / CRN pairs
 - `/seeerrors enabled:<true|false>` — opt in or out of seat API error notifications for your tracked pairs
 - `/specialautopost enabled:<true|false>` — opt in or out of the special CS3000 / 13895 auto-post request
 - `/setautoparams xsynctoken:<token> cookieString:<cookie> uniqueSessionId:<id>` — store the special auto-post session values used for the CS3000 / 13895 flow
@@ -47,6 +49,7 @@ npm start
 
 - Registrations, guild channel settings, stored auto-post parameters, and per-user opt-in settings are persisted in `data/seat-monitor-state.json`.
 - Polling uses a randomized delay between checks.
+- If multiple users register the same course / CRN pair, the bot performs one shared background seat check for that pair and then notifies all matching users.
 - The bot supports both `http` and `https` seat API base URLs.
 - The special keepalive endpoint is polled every 4 minutes while auto-post parameters are stored.
 - Error messages are off by default and are only sent for users who enable them with `/seeerrors enabled:true`.

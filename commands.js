@@ -27,6 +27,28 @@ const REGISTER_COMMAND = {
   ],
 };
 
+const UNREGISTER_COMMAND = {
+  name: 'unregister',
+  description: 'Remove a stored course and CRN from seat alerts',
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+  options: [
+    {
+      type: 3,
+      name: 'course',
+      description: 'Course code, such as CSCI101',
+      required: true,
+    },
+    {
+      type: 3,
+      name: 'crn',
+      description: 'Course reference number',
+      required: true,
+    },
+  ],
+};
+
 const START_COMMAND = {
   name: 'start',
   description: 'Start posting seat alerts in this channel',
@@ -38,6 +60,14 @@ const START_COMMAND = {
 const CHECKNOW_COMMAND = {
   name: 'checknow',
   description: 'Check all tracked course and CRN combos right now',
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+};
+
+const LISTREGISTRATIONS_COMMAND = {
+  name: 'listregistrations',
+  description: 'List all tracked course and CRN combos for your account',
   type: 1,
   integration_types: [0, 1],
   contexts: [0, 1, 2],
@@ -125,7 +155,7 @@ async function resolveGuildId() {
 const guildId = await resolveGuildId();
 
 if (guildId) {
-  await InstallGuildCommands(process.env.APP_ID, guildId, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, SEEERRORS_COMMAND, SPECIALAUTOPOST_COMMAND, SETAUTOPARAMS_COMMAND]);
+  await InstallGuildCommands(process.env.APP_ID, guildId, [REGISTER_COMMAND, UNREGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, LISTREGISTRATIONS_COMMAND, SEEERRORS_COMMAND, SPECIALAUTOPOST_COMMAND, SETAUTOPARAMS_COMMAND]);
 } else {
-  await InstallGlobalCommands(process.env.APP_ID, [REGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, SEEERRORS_COMMAND, SPECIALAUTOPOST_COMMAND, SETAUTOPARAMS_COMMAND]);
+  await InstallGlobalCommands(process.env.APP_ID, [REGISTER_COMMAND, UNREGISTER_COMMAND, START_COMMAND, CHECKNOW_COMMAND, LISTREGISTRATIONS_COMMAND, SEEERRORS_COMMAND, SPECIALAUTOPOST_COMMAND, SETAUTOPARAMS_COMMAND]);
 }

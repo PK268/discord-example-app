@@ -44,8 +44,29 @@ function formatTrackedCourses() {
   return ['Currently traced course/CRN combos:', ...lines].join('\n');
 }
 
+function formatUserRegistrations(userId) {
+  const userRegistrations = getRegistrationsForUser(userId)
+    .map(({ registration }) => registration)
+    .sort((a, b) => a.course.localeCompare(b.course) || a.crn.localeCompare(b.crn));
+
+  if (userRegistrations.length === 0) {
+    return 'You are not tracking any course/CRN combos.';
+  }
+
+  const lines = userRegistrations.map((entry) => `- ${entry.course} / ${entry.crn}`);
+  return ['Your tracked course/CRN combos:', ...lines].join('\n');
+}
+
 function getRegistrationKey(entry) {
   return `${entry.userId}:${entry.course}:${entry.crn}`;
+}
+
+function getCourseCrnKey(course, crn) {
+  return `${course.trim().toUpperCase()}:${crn.trim()}`;
+}
+
+function getCourseCrnKeyFromRegistration(entry) {
+  return getCourseCrnKey(entry.course, entry.crn);
 }
 
 function upsertRegistration(entry) {
@@ -54,9 +75,27 @@ function upsertRegistration(entry) {
   return key;
 }
 
+function removeRegistration(entry) {
+  const key = getRegistrationKey(entry);
+  const removed = registrations.delete(key);
+
+  return {
+    key,
+    removed,
+  };
+}
+
 function getRegistrationsForUser(userId) {
   return [...registrations.entries()]
     .filter(([, registration]) => registration.userId === userId)
+    .map(([key, registration]) => ({ key, registration }));
+}
+
+function getRegistrationsForCourseCrn(course, crn) {
+  const comboKey = getCourseCrnKey(course, crn);
+
+  return [...registrations.entries()]
+    .filter(([, registration]) => getCourseCrnKeyFromRegistration(registration) === comboKey)
     .map(([key, registration]) => ({ key, registration }));
 }
 
@@ -356,32 +395,48 @@ async function triggerSpecialAutoPost(registration) {
   };
 }
 
-function scheduleNextCheck(registrationKey) {
-  const existingTimer = scheduledChecks.get(registrationKey);
+function scheduleNextCheck(comboKey) {
+  const existingTimer = scheduledChecks.get(comboKey);
 
   if (existingTimer) {
     clearTimeout(existingTimer);
   }
 
-  if (!registrations.has(registrationKey)) {
-    scheduledChecks.delete(registrationKey);
+  const comboRegistrations = [...registrations.values()].filter((registration) => getCourseCrnKeyFromRegistration(registration) === comboKey);
+
+  if (comboRegistrations.length === 0) {
+    scheduledChecks.delete(comboKey);
     return;
   }
 
   const timer = setTimeout(() => {
-    void runCheck(registrationKey);
+    void runCheck(comboKey);
   }, randomDelay());
 
-  scheduledChecks.set(registrationKey, timer);
+  scheduledChecks.set(comboKey, timer);
 }
 
-async function notifyChannels(seatCount, registration, errorDetail) {
+async function notifyChannels(seatCount, comboRegistrations, errorDetail) {
   if (guildChannels.size === 0) {
     return;
   }
 
-  const baseMessage = `${registration.course} (${registration.crn})`;
-  const userMention = `<@${registration.userId}>`;
+  if (comboRegistrations.length === 0) {
+    return;
+  }
+
+  const [{ registration: firstRegistration }] = comboRegistrations;
+  const baseMessage = `${firstRegistration.course} (${firstRegistration.crn})`;
+  const recipientRegistrations = seatCount > 0
+    ? comboRegistrations
+    : comboRegistrations.filter(({ registration }) => shouldReceiveErrorNotifications(registration.userId));
+
+  if (recipientRegistrations.length === 0) {
+    return;
+  }
+
+  const userIds = [...new Set(recipientRegistrations.map(({ registration }) => registration.userId))];
+  const userMentions = userIds.map((userId) => `<@${userId}>`).join(' ');
   const notifications = [];
 
   for (const channelId of guildChannels.values()) {
@@ -394,30 +449,22 @@ async function notifyChannels(seatCount, registration, errorDetail) {
     if (seatCount > 0) {
       notifications.push(
         channel.send({
-          content: `${userMention} seats are available for ${baseMessage}: ${seatCount} open.`,
-          allowedMentions: { users: [registration.userId] },
+          content: `${userMentions} seats are available for ${baseMessage}: ${seatCount} open.`,
+          allowedMentions: { users: userIds },
         })
       );
     } else if (seatCount === -1) {
-      if (!shouldReceiveErrorNotifications(registration.userId)) {
-        continue;
-      }
-
       notifications.push(
         channel.send({
-          content: `${userMention} seat API returned -1 for ${baseMessage}.`,
-          allowedMentions: { users: [registration.userId] },
+          content: `${userMentions} seat API returned -1 for ${baseMessage}.`,
+          allowedMentions: { users: userIds },
         })
       );
     } else if (seatCount === -2) {
-      if (!shouldReceiveErrorNotifications(registration.userId)) {
-        continue;
-      }
-
       notifications.push(
         channel.send({
-          content: `${userMention} seat API request failed for ${baseMessage}: ${errorDetail ?? 'unknown error'}`,
-          allowedMentions: { users: [registration.userId] },
+          content: `${userMentions} seat API request failed for ${baseMessage}: ${errorDetail ?? 'unknown error'}`,
+          allowedMentions: { users: userIds },
         })
       );
     }
@@ -426,32 +473,38 @@ async function notifyChannels(seatCount, registration, errorDetail) {
   await Promise.allSettled(notifications);
 }
 
-async function processOpenSeat(registration, seatCount) {
-  const autoPostResult = await triggerSpecialAutoPost(registration).catch((error) => ({
-    attempted: true,
-    failed: true,
-    message: error instanceof Error ? error.message : String(error),
-  }));
+async function processOpenSeat(comboRegistrations, seatCount) {
+  for (const { registration } of comboRegistrations) {
+    const autoPostResult = await triggerSpecialAutoPost(registration).catch((error) => ({
+      attempted: true,
+      failed: true,
+      message: error instanceof Error ? error.message : String(error),
+    }));
 
-  if (autoPostResult?.failed) {
-    console.error(`Special auto-post failed for ${registration.course} ${registration.crn}:`, autoPostResult.message);
-    await notifyChannels(-2, registration, `special auto-post failed: ${autoPostResult.message}`);
-  } else if (autoPostResult?.attempted) {
-    console.log(`Special auto-post succeeded for ${registration.course} / ${registration.crn} with status ${autoPostResult.statusCode}.`);
-  } else if (autoPostResult?.reason) {
-    console.log(`Special auto-post skipped for ${registration.course} / ${registration.crn}: ${autoPostResult.reason}`);
+    if (autoPostResult?.failed) {
+      console.error(`Special auto-post failed for ${registration.course} ${registration.crn}:`, autoPostResult.message);
+      await notifyChannels(-2, [{ key: getRegistrationKey(registration), registration }], `special auto-post failed: ${autoPostResult.message}`);
+    } else if (autoPostResult?.attempted) {
+      console.log(`Special auto-post succeeded for ${registration.course} / ${registration.crn} with status ${autoPostResult.statusCode}.`);
+    } else if (autoPostResult?.reason) {
+      console.log(`Special auto-post skipped for ${registration.course} / ${registration.crn}: ${autoPostResult.reason}`);
+    }
   }
 
-  await notifyChannels(seatCount, registration);
+  await notifyChannels(seatCount, comboRegistrations);
 }
 
-async function runCheck(registrationKey) {
-  const registration = registrations.get(registrationKey);
+async function runCheck(comboKey) {
+  const comboRegistrations = [...registrations.entries()]
+    .filter(([, registration]) => getCourseCrnKeyFromRegistration(registration) === comboKey)
+    .map(([key, registration]) => ({ key, registration }));
 
-  if (!registration) {
-    scheduledChecks.delete(registrationKey);
+  if (comboRegistrations.length === 0) {
+    scheduledChecks.delete(comboKey);
     return;
   }
+
+  const [{ registration }] = comboRegistrations;
 
   try {
     const seatCount = await fetchSeatCount(registration.course, registration.crn);
@@ -461,16 +514,16 @@ async function runCheck(registrationKey) {
     }
 
     if (seatCount === -1) {
-      await notifyChannels(-1, registration);
+      await notifyChannels(-1, comboRegistrations);
       return;
     }
 
-    await processOpenSeat(registration, seatCount);
+    await processOpenSeat(comboRegistrations, seatCount);
   } catch (error) {
-    await notifyChannels(-2, registration, error instanceof Error ? error.message : String(error));
+    await notifyChannels(-2, comboRegistrations, error instanceof Error ? error.message : String(error));
     console.error(`Seat check request failed for ${registration.course} ${registration.crn}:`, error);
   } finally {
-    scheduleNextCheck(registrationKey);
+    scheduleNextCheck(comboKey);
   }
 }
 
@@ -506,16 +559,16 @@ async function runCheckNowForUser(userId) {
 
       if (seatCount === -1) {
         summary.apiReturnedNegativeOne += 1;
-        await notifyChannels(-1, registration);
+        await notifyChannels(-1, [{ key, registration }]);
         continue;
       }
 
       summary.openSeats += 1;
-      await processOpenSeat(registration, seatCount);
-      scheduleNextCheck(key);
+      await processOpenSeat([{ key, registration }], seatCount);
+      scheduleNextCheck(getCourseCrnKeyFromRegistration(registration));
     } catch (error) {
       summary.requestFailures += 1;
-      await notifyChannels(-2, registration, error instanceof Error ? error.message : String(error));
+      await notifyChannels(-2, [{ key, registration }], error instanceof Error ? error.message : String(error));
       console.error(`Manual seat check request failed for ${registration.course} ${registration.crn}:`, error);
     }
   }
@@ -544,7 +597,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     console.log(`Stored registration from ${interaction.user.tag}: ${course} / ${crn}`);
 
-    scheduleNextCheck(key);
+    scheduleNextCheck(getCourseCrnKeyFromRegistration(registration));
 
     try {
       await saveState();
@@ -558,6 +611,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
         'Seat checks will run automatically every couple minutes.',
         'Use /start in a server channel to post seat alerts there.',
       ].join('\n'),
+      ephemeral: true,
+      allowedMentions: { parse: [] },
+    });
+
+    return;
+  }
+
+  if (interaction.commandName === 'unregister') {
+    const course = interaction.options.getString('course', true).trim();
+    const crn = interaction.options.getString('crn', true).trim();
+    const registration = {
+      course,
+      crn,
+      userId: interaction.user.id,
+    };
+    const comboKey = getCourseCrnKeyFromRegistration(registration);
+    const { removed } = removeRegistration(registration);
+
+    if (!removed) {
+      await interaction.reply({
+        content: `You were not tracking ${course} / ${crn}.`,
+        ephemeral: true,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
+    console.log(`Removed registration from ${interaction.user.tag}: ${course} / ${crn}`);
+
+    scheduleNextCheck(comboKey);
+
+    try {
+      await saveState();
+    } catch (error) {
+      console.error('Failed to save registration state:', error);
+    }
+
+    await interaction.reply({
+      content: `Stopped tracking ${course} / ${crn} for your account.`,
       ephemeral: true,
       allowedMentions: { parse: [] },
     });
@@ -672,6 +764,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.commandName === 'listregistrations') {
+    await interaction.reply({
+      content: formatUserRegistrations(interaction.user.id),
+      ephemeral: true,
+      allowedMentions: { parse: [] },
+    });
+
+    return;
+  }
+
   if (interaction.commandName !== 'start') {
     return;
   }
@@ -707,7 +809,11 @@ client.once(Events.ClientReady, async () => {
   }
 
   for (const registrationKey of registrations.keys()) {
-    scheduleNextCheck(registrationKey);
+    const registration = registrations.get(registrationKey);
+
+    if (registration) {
+      scheduleNextCheck(getCourseCrnKeyFromRegistration(registration));
+    }
   }
 
   for (const userId of autoPostParams.keys()) {
